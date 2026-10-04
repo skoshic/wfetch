@@ -1,5 +1,8 @@
 # whiskerfetch
 
+[![crates.io](https://img.shields.io/crates/v/whiskerfetch.svg)](https://crates.io/crates/whiskerfetch)
+[![license](https://img.shields.io/crates/l/whiskerfetch.svg)](https://github.com/skoshic/wfetch/blob/main/LICENSE)
+
 ```text
                     ..
      .@@@.        .@@@@

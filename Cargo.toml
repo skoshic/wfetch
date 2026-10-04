@@ -3,6 +3,11 @@ name = "whiskerfetch"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
+description = "A very fast sysfetch that works mainly via C extern functions"
+repository = "https://github.com/skoshic/wfetch"
+readme = "README.md"
+keywords = ["sysfetch", "system", "cli", "fetch"]
+categories = ["command-line-utilities"]
 
 [[bin]]
 name = "wfetch"
