@@ -39,7 +39,7 @@ Display: 2940x1912 @ 60Hz
 Disk (/): 265.11 GiB / 460.38 GiB (57%)
 ```
 
-Whiskerfetch (short: wfetch) is a very fast sysfetch that works mainly via (painful) C extern functions.
+Whiskerfetch (short: wfetch) is a very fast and zero dependency sysfetch that works mainly via (painful) C extern functions.
 I hope to make it more customizable as the project grows.
 
 ## Installation
