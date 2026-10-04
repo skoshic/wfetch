@@ -42,6 +42,7 @@ I hope to make it more customizable as the project grows.
 ## Installation
 
 Either ...
+
 ... through Cargo:
 
 ```sh
