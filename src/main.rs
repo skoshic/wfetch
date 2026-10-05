@@ -2192,6 +2192,140 @@ fn get_disks() -> Vec<(String, u64, u64)> {
     Vec::new()
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const IFF_UP: u32 = 0x1;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const IFF_LOOPBACK: u32 = 0x8;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const AF_INET_VALUE: u16 = 2;
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[repr(C)]
+struct IfAddrs {
+    next: *mut IfAddrs,
+    name: *const c_char,
+    flags: u32,
+    addr: *mut std::os::raw::c_void,
+    netmask: *mut std::os::raw::c_void,
+    dst: *mut std::os::raw::c_void,
+    data: *mut std::os::raw::c_void,
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+unsafe extern "C" {
+    fn getifaddrs(list: *mut *mut IfAddrs) -> c_int;
+    fn freeifaddrs(list: *mut IfAddrs);
+}
+
+#[cfg(target_os = "linux")]
+fn sockaddr_family(addr: *mut std::os::raw::c_void) -> u16 {
+    unsafe { *(addr as *const u16) }
+}
+
+#[cfg(target_os = "macos")]
+fn sockaddr_family(addr: *mut std::os::raw::c_void) -> u16 {
+    unsafe { *((addr as *const u8).add(1)) as u16 }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn sockaddr_ipv4(addr: *mut std::os::raw::c_void) -> Option<[u8; 4]> {
+    if addr.is_null() || sockaddr_family(addr) != AF_INET_VALUE {
+        return None;
+    }
+    let mut octets = [0u8; 4];
+    unsafe { std::ptr::copy_nonoverlapping((addr as *const u8).add(4), octets.as_mut_ptr(), 4) };
+    Some(octets)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn prefix_len(mask: &[u8; 4]) -> u8 {
+    mask.iter().map(|b| b.count_ones() as u8).sum()
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn list_ipv4_interfaces() -> Vec<(String, [u8; 4], u8)> {
+    let mut interfaces = Vec::new();
+    let mut list: *mut IfAddrs = std::ptr::null_mut();
+    if unsafe { getifaddrs(&mut list) } != 0 || list.is_null() {
+        return interfaces;
+    }
+    let mut current = list;
+    while !current.is_null() {
+        let entry = unsafe { &*current };
+        current = entry.next;
+        if entry.name.is_null() {
+            continue;
+        }
+        if entry.flags & IFF_UP == 0 || entry.flags & IFF_LOOPBACK != 0 {
+            continue;
+        }
+        let ip = match sockaddr_ipv4(entry.addr) {
+            Some(ip) => ip,
+            None => continue,
+        };
+        if ip[0] == 127 {
+            continue;
+        }
+        let mask = match sockaddr_ipv4(entry.netmask) {
+            Some(mask) => mask,
+            None => continue,
+        };
+        let name = match unsafe { std::ffi::CStr::from_ptr(entry.name) }.to_str() {
+            Ok(name) if !name.is_empty() => name.to_string(),
+            _ => continue,
+        };
+        interfaces.push((name, ip, prefix_len(&mask)));
+    }
+    unsafe { freeifaddrs(list) };
+    interfaces
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn default_route_ip() -> Option<[u8; 4]> {
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("1.1.1.1:80").ok()?;
+    match socket.local_addr().ok()? {
+        std::net::SocketAddr::V4(addr) => Some(addr.ip().octets()),
+        _ => None,
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn pick_local_ip(
+    interfaces: &[(String, [u8; 4], u8)],
+    default: Option<[u8; 4]>,
+) -> Option<(String, [u8; 4], u8)> {
+    if let Some(ip) = default
+        && let Some(found) = interfaces.iter().find(|iface| iface.1 == ip)
+    {
+        return Some(found.clone());
+    }
+    interfaces.first().cloned()
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn format_local_ip(name: &str, ip: &[u8; 4], prefix: u8) -> String {
+    format!(
+        "({name}): {}.{}.{}.{}/{}",
+        ip[0], ip[1], ip[2], ip[3], prefix
+    )
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn get_local_ip() -> Option<String> {
+    let interfaces = list_ipv4_interfaces();
+    if interfaces.is_empty() {
+        return None;
+    }
+    let (name, ip, prefix) = pick_local_ip(&interfaces, default_route_ip())?;
+    Some(format_local_ip(&name, &ip, prefix))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn get_local_ip() -> Option<String> {
+    None
+}
+
 fn main() {
     println!("Hostname: {}", get_hostname());
     println!("OS: {}", get_os_info());
@@ -2237,5 +2371,9 @@ fn main() {
         for (point, used, total) in &disks {
             println!("Disk ({}): {}", point, format_bytes(*used, *total));
         }
+    }
+    match get_local_ip() {
+        Some(line) => println!("Local IP {line}"),
+        None => println!("Local IP: unknown"),
     }
 }
