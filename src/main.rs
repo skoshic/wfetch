@@ -10,7 +10,9 @@ use std::ffi::{CStr, c_char};
 #[cfg(target_os = "macos")]
 use std::ptr;
 
-include!(concat!(env!("OUT_DIR"), "/logos.rs"));
+mod logos;
+
+use logos::{LOGO_UNKNOWN, LOGOS, LogoEntry};
 
 unsafe extern "C" {
     fn gethostname(name: *mut u8, len: usize) -> c_int;
