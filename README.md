@@ -82,3 +82,5 @@ Benchmark 1: ./target/release/wfetch
 ## License
 
 Whiskerfetch is licensed under the MIT license.
+
+Terminal logos are adapted from [fastfetch](https://github.com/fastfetch-cli/fastfetch) (MIT licensed. see `assets/fastfetch-LICENSE`).

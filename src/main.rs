@@ -10,6 +10,8 @@ use std::ffi::{CStr, c_char};
 #[cfg(target_os = "macos")]
 use std::ptr;
 
+include!(concat!(env!("OUT_DIR"), "/logos.rs"));
+
 unsafe extern "C" {
     fn gethostname(name: *mut u8, len: usize) -> c_int;
 }
@@ -2326,34 +2328,198 @@ fn get_local_ip() -> Option<String> {
     None
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+unsafe extern "C" {
+    fn isatty(fd: i32) -> i32;
+}
+
+fn colors_enabled() -> bool {
+    if std::env::var_os("NO_COLOR").is_some() {
+        return false;
+    }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        unsafe { isatty(1) == 1 }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        false
+    }
+}
+
+fn char_width(c: char) -> usize {
+    match c as u32 {
+        0x0300..=0x036F | 0x200D | 0xFE00..=0xFE0F => 0,
+        0x1100..=0x115F
+        | 0x2E80..=0xA4CF
+        | 0xAC00..=0xD7A3
+        | 0xF900..=0xFAFF
+        | 0xFE30..=0xFE4F
+        | 0xFF00..=0xFF60
+        | 0xFFE0..=0xFFE6
+        | 0x2600..=0x27BF
+        | 0x2B00..=0x2BFF
+        | 0x1F300..=0x1FAFF
+        | 0x20000..=0x3FFFD => 2,
+        _ => 1,
+    }
+}
+
+fn logo_visible_width(line: &str) -> usize {
+    let mut width = 0;
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '$' {
+            match chars.peek() {
+                Some('1'..='9') => {
+                    chars.next();
+                }
+                Some('$') => {
+                    chars.next();
+                    width += 1;
+                }
+                _ => {
+                    width += 1;
+                }
+            }
+        } else {
+            width += char_width(c);
+        }
+    }
+    width
+}
+
+fn paint_logo_line(
+    line: &str,
+    colors: &[&str],
+    carry: &mut String,
+    colorize: bool,
+    out: &mut String,
+) {
+    if logo_visible_width(line) == 0 {
+        return;
+    }
+    if colorize {
+        out.push_str("\x1b[1m");
+        out.push_str(carry);
+    }
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '$' {
+            match chars.peek() {
+                Some(digit) if ('1'..='9').contains(digit) => {
+                    let index = *digit as usize - '1' as usize;
+                    chars.next();
+                    if colorize {
+                        let code = colors.get(index).copied().unwrap_or("\x1b[m");
+                        out.push_str(code);
+                        carry.clear();
+                        carry.push_str(code);
+                    }
+                }
+                Some('$') => {
+                    chars.next();
+                    out.push('$');
+                }
+                _ => {
+                    out.push('$');
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    if colorize {
+        out.push_str("\x1b[m");
+    }
+}
+
+fn select_logo(candidates: &[&str]) -> &'static LogoEntry {
+    for candidate in candidates {
+        if candidate.is_empty() || !candidate.as_bytes()[0].is_ascii_alphabetic() {
+            continue;
+        }
+        for entry in LOGOS {
+            if entry
+                .names
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(candidate))
+            {
+                return entry;
+            }
+        }
+    }
+    &LOGO_UNKNOWN
+}
+
+#[cfg(target_os = "macos")]
+fn select_platform_logo() -> &'static LogoEntry {
+    select_logo(&["apple"])
+}
+
+#[cfg(target_os = "linux")]
+fn select_platform_logo() -> &'static LogoEntry {
+    let mut candidates: Vec<String> = Vec::new();
+    if let Ok(content) = std::fs::read_to_string("/etc/os-release") {
+        for line in content.lines() {
+            if let Some(id) = line.strip_prefix("ID=") {
+                let id = id.trim_matches('"').trim().to_string();
+                if !id.is_empty() {
+                    candidates.push(id);
+                }
+            } else if let Some(like) = line.strip_prefix("ID_LIKE=") {
+                for token in like.trim_matches('"').split_whitespace() {
+                    if !token.is_empty() {
+                        candidates.push(token.to_string());
+                    }
+                }
+            }
+        }
+    }
+    candidates.push("linux".to_string());
+    let refs: Vec<&str> = candidates.iter().map(|s| s.as_str()).collect();
+    select_logo(&refs)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn select_platform_logo() -> &'static LogoEntry {
+    static EMPTY: LogoEntry = LogoEntry {
+        names: &[],
+        colors: &[],
+        art: &[],
+    };
+    &EMPTY
+}
+
 fn main() {
-    println!("Hostname: {}", get_hostname());
-    println!("OS: {}", get_os_info());
-    println!("Kernel: {}", get_kernel());
-    println!("Device: {}", get_device());
-    println!("Uptime: {}", get_uptime());
+    let mut info = Vec::new();
+    info.push(format!("Hostname: {}", get_hostname()));
+    info.push(format!("OS: {}", get_os_info()));
+    info.push(format!("Kernel: {}", get_kernel()));
+    info.push(format!("Device: {}", get_device()));
+    info.push(format!("Uptime: {}", get_uptime()));
     let shell = get_shell();
-    println!("Shell: {}", shell);
-    println!("Init: {}", get_init());
-    println!("Terminal: {}", get_terminal(&shell));
-    println!("CPU: {}", get_cpu());
-    println!("RAM: {}", get_ram());
+    info.push(format!("Shell: {shell}"));
+    info.push(format!("Init: {}", get_init()));
+    info.push(format!("Terminal: {}", get_terminal(&shell)));
+    info.push(format!("CPU: {}", get_cpu()));
+    info.push(format!("RAM: {}", get_ram()));
     let gpus = get_gpus();
     if gpus.is_empty() {
-        println!("GPU: unknown");
+        info.push("GPU: unknown".to_string());
     } else if gpus.len() == 1 {
-        println!("GPU: {}", gpus[0]);
+        info.push(format!("GPU: {}", gpus[0]));
     } else {
         for (i, gpu) in gpus.iter().enumerate() {
-            println!("GPU ({}): {}", i + 1, gpu);
+            info.push(format!("GPU ({}): {}", i + 1, gpu));
         }
     }
     let displays = get_displays();
     if displays.is_empty() {
-        println!("Display: unknown");
+        info.push("Display: unknown".to_string());
     } else if displays.len() == 1 {
         let (_, w, h, hz) = &displays[0];
-        println!("Display: {}", format_resolution(*w, *h, *hz));
+        info.push(format!("Display: {}", format_resolution(*w, *h, *hz)));
     } else {
         for (i, (label, w, h, hz)) in displays.iter().enumerate() {
             let tag = if label.is_empty() {
@@ -2361,19 +2527,64 @@ fn main() {
             } else {
                 label.clone()
             };
-            println!("Display ({}): {}", tag, format_resolution(*w, *h, *hz));
+            info.push(format!(
+                "Display ({}): {}",
+                tag,
+                format_resolution(*w, *h, *hz)
+            ));
         }
     }
     let disks = get_disks();
     if disks.is_empty() {
-        println!("Disk: unknown");
+        info.push("Disk: unknown".to_string());
     } else {
         for (point, used, total) in &disks {
-            println!("Disk ({}): {}", point, format_bytes(*used, *total));
+            info.push(format!("Disk ({}): {}", point, format_bytes(*used, *total)));
         }
     }
     match get_local_ip() {
-        Some(line) => println!("Local IP {line}"),
-        None => println!("Local IP: unknown"),
+        Some(line) => info.push(format!("Local IP {line}")),
+        None => info.push("Local IP: unknown".to_string()),
+    }
+    let logo = select_platform_logo();
+    let colorize = colors_enabled();
+    let mut carry = String::new();
+    if colorize && let Some(base) = logo.colors.first() {
+        carry.push_str(base);
+    }
+    let width = logo
+        .art
+        .iter()
+        .map(|line| logo_visible_width(line))
+        .max()
+        .unwrap_or(0);
+    let rows = logo.art.len().max(info.len());
+    for i in 0..rows {
+        match (logo.art.get(i), info.get(i)) {
+            (Some(art), Some(text)) => {
+                let mut line = String::new();
+                paint_logo_line(art, logo.colors, &mut carry, colorize, &mut line);
+                let pad = width.saturating_sub(logo_visible_width(art));
+                for _ in 0..pad {
+                    line.push(' ');
+                }
+                line.push_str("  ");
+                line.push_str(text);
+                println!("{line}");
+            }
+            (Some(art), None) => {
+                let mut line = String::new();
+                paint_logo_line(art, logo.colors, &mut carry, colorize, &mut line);
+                println!("{line}");
+            }
+            (None, Some(text)) => {
+                if width == 0 {
+                    println!("{text}");
+                } else {
+                    println!("{:width$}  {text}", "", width = width);
+                }
+            }
+            (None, None) => {}
+        }
     }
 }
