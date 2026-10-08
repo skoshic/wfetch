@@ -2493,20 +2493,165 @@ fn select_platform_logo() -> &'static LogoEntry {
     &EMPTY
 }
 
+fn json_escape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+fn push_json_field(out: &mut String, first: &mut bool, key: &str, value: &str) {
+    if !*first {
+        out.push(',');
+    }
+    *first = false;
+    out.push('"');
+    out.push_str(key);
+    out.push_str("\":\"");
+    out.push_str(&json_escape(value));
+    out.push('"');
+}
+
+fn push_json_array_open(out: &mut String, first: &mut bool, key: &str) {
+    if !*first {
+        out.push(',');
+    }
+    *first = false;
+    out.push('"');
+    out.push_str(key);
+    out.push_str("\":[");
+}
+
+fn print_json(
+    fields: &[(&str, &str)],
+    gpus: &[String],
+    displays: &[(String, u32, u32, u32)],
+    disks: &[(String, u64, u64)],
+    local_ip: Option<&String>,
+) {
+    let mut out = String::from("{");
+    let mut first = true;
+    for (key, value) in fields {
+        push_json_field(&mut out, &mut first, key, value);
+    }
+    push_json_array_open(&mut out, &mut first, "gpu");
+    for (i, gpu) in gpus.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push('"');
+        out.push_str(&json_escape(gpu));
+        out.push('"');
+    }
+    out.push(']');
+    push_json_array_open(&mut out, &mut first, "display");
+    if displays.len() == 1 {
+        let (_, w, h, hz) = &displays[0];
+        out.push('"');
+        out.push_str(&json_escape(&format_resolution(*w, *h, *hz)));
+        out.push('"');
+    } else {
+        for (i, (label, w, h, hz)) in displays.iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            let tag = if label.is_empty() {
+                (i + 1).to_string()
+            } else {
+                label.clone()
+            };
+            out.push('"');
+            out.push_str(&json_escape(&format!(
+                "{tag}: {}",
+                format_resolution(*w, *h, *hz)
+            )));
+            out.push('"');
+        }
+    }
+    out.push(']');
+    push_json_array_open(&mut out, &mut first, "disk");
+    for (i, (point, used, total)) in disks.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push('"');
+        out.push_str(&json_escape(&format!(
+            "{point}: {}",
+            format_bytes(*used, *total)
+        )));
+        out.push('"');
+    }
+    out.push(']');
+    match local_ip {
+        Some(line) => push_json_field(&mut out, &mut first, "local_ip", line),
+        None => push_json_field(&mut out, &mut first, "local_ip", "unknown"),
+    }
+    out.push('}');
+    println!("{out}");
+}
+
 fn main() {
-    let mut info = Vec::new();
-    info.push(format!("Hostname: {}", get_hostname()));
-    info.push(format!("OS: {}", get_os_info()));
-    info.push(format!("Kernel: {}", get_kernel()));
-    info.push(format!("Device: {}", get_device()));
-    info.push(format!("Uptime: {}", get_uptime()));
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|arg| arg == "--help") {
+        println!("wetch {}", env!("CARGO_PKG_VERSION"));
+        println!();
+        println!("Usage: wfetch [--json] [--help]");
+        println!();
+        println!("  --json   print as a single line of JSON");
+        println!("  --help   show this message");
+        return;
+    }
+    let json = args.iter().any(|arg| arg == "--json");
+    let hostname = get_hostname();
+    let os = get_os_info();
+    let kernel = get_kernel();
+    let device = get_device();
+    let uptime = get_uptime();
     let shell = get_shell();
-    info.push(format!("Shell: {shell}"));
-    info.push(format!("Init: {}", get_init()));
-    info.push(format!("Terminal: {}", get_terminal(&shell)));
-    info.push(format!("CPU: {}", get_cpu()));
-    info.push(format!("RAM: {}", get_ram()));
+    let init = get_init();
+    let terminal = get_terminal(&shell);
+    let cpu = get_cpu();
+    let ram = get_ram();
     let gpus = get_gpus();
+    let displays = get_displays();
+    let disks = get_disks();
+    let local_ip = get_local_ip();
+    if json {
+        let fields = [
+            ("hostname", hostname.as_str()),
+            ("os", os.as_str()),
+            ("kernel", kernel.as_str()),
+            ("device", device.as_str()),
+            ("uptime", uptime.as_str()),
+            ("shell", shell.as_str()),
+            ("init", init.as_str()),
+            ("terminal", terminal.as_str()),
+            ("cpu", cpu.as_str()),
+            ("ram", ram.as_str()),
+        ];
+        print_json(&fields, &gpus, &displays, &disks, local_ip.as_ref());
+        return;
+    }
+    let mut info = Vec::new();
+    info.push(format!("Hostname: {hostname}"));
+    info.push(format!("OS: {os}"));
+    info.push(format!("Kernel: {kernel}"));
+    info.push(format!("Device: {device}"));
+    info.push(format!("Uptime: {uptime}"));
+    info.push(format!("Shell: {shell}"));
+    info.push(format!("Init: {init}"));
+    info.push(format!("Terminal: {terminal}"));
+    info.push(format!("CPU: {cpu}"));
+    info.push(format!("RAM: {ram}"));
     if gpus.is_empty() {
         info.push("GPU: unknown".to_string());
     } else if gpus.len() == 1 {
@@ -2516,7 +2661,6 @@ fn main() {
             info.push(format!("GPU ({}): {}", i + 1, gpu));
         }
     }
-    let displays = get_displays();
     if displays.is_empty() {
         info.push("Display: unknown".to_string());
     } else if displays.len() == 1 {
@@ -2536,7 +2680,6 @@ fn main() {
             ));
         }
     }
-    let disks = get_disks();
     if disks.is_empty() {
         info.push("Disk: unknown".to_string());
     } else {
@@ -2544,7 +2687,7 @@ fn main() {
             info.push(format!("Disk ({}): {}", point, format_bytes(*used, *total)));
         }
     }
-    match get_local_ip() {
+    match &local_ip {
         Some(line) => info.push(format!("Local IP {line}")),
         None => info.push("Local IP: unknown".to_string()),
     }
