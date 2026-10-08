@@ -2602,7 +2602,7 @@ fn print_json(
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|arg| arg == "--help") {
-        println!("wetch {}", env!("CARGO_PKG_VERSION"));
+        println!("wfetch {}", env!("CARGO_PKG_VERSION"));
         println!();
         println!("Usage: wfetch [--json] [--help]");
         println!();
