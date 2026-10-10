@@ -10,9 +10,15 @@ use std::ffi::{CStr, c_char};
 #[cfg(target_os = "macos")]
 use std::ptr;
 
+mod config;
 mod logos;
+mod style;
+mod tui;
 
 use logos::{LOGO_UNKNOWN, LOGOS, LogoEntry};
+use style::{
+    ColorMode, LabelColor, LabelFont, LabelStyle, RenderOptions, parse_color, parse_font, render,
+};
 
 unsafe extern "C" {
     fn gethostname(name: *mut u8, len: usize) -> c_int;
@@ -2349,93 +2355,6 @@ fn colors_enabled() -> bool {
     }
 }
 
-fn char_width(c: char) -> usize {
-    match c as u32 {
-        0x0300..=0x036F | 0x200D | 0xFE00..=0xFE0F => 0,
-        0x1100..=0x115F
-        | 0x2E80..=0xA4CF
-        | 0xAC00..=0xD7A3
-        | 0xF900..=0xFAFF
-        | 0xFE30..=0xFE4F
-        | 0xFF00..=0xFF60
-        | 0xFFE0..=0xFFE6
-        | 0x2600..=0x27BF
-        | 0x2B00..=0x2BFF
-        | 0x1F300..=0x1FAFF
-        | 0x20000..=0x3FFFD => 2,
-        _ => 1,
-    }
-}
-
-fn logo_visible_width(line: &str) -> usize {
-    let mut width = 0;
-    let mut chars = line.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '$' {
-            match chars.peek() {
-                Some('1'..='9') => {
-                    chars.next();
-                }
-                Some('$') => {
-                    chars.next();
-                    width += 1;
-                }
-                _ => {
-                    width += 1;
-                }
-            }
-        } else {
-            width += char_width(c);
-        }
-    }
-    width
-}
-
-fn paint_logo_line(
-    line: &str,
-    colors: &[&str],
-    carry: &mut String,
-    colorize: bool,
-    out: &mut String,
-) {
-    if logo_visible_width(line) == 0 {
-        return;
-    }
-    if colorize {
-        out.push_str("\x1b[1m");
-        out.push_str(carry);
-    }
-    let mut chars = line.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '$' {
-            match chars.peek() {
-                Some(digit) if ('1'..='9').contains(digit) => {
-                    let index = *digit as usize - '1' as usize;
-                    chars.next();
-                    if colorize {
-                        let code = colors.get(index).copied().unwrap_or("\x1b[m");
-                        out.push_str(code);
-                        carry.clear();
-                        carry.push_str(code);
-                    }
-                }
-                Some('$') => {
-                    chars.next();
-                    out.push('$');
-                }
-                _ => {
-                    out.push('$');
-                }
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    if colorize {
-        out.push_str("\x1b[m");
-    }
-}
-
 fn select_logo(candidates: &[&str]) -> &'static LogoEntry {
     for candidate in candidates {
         if candidate.is_empty() || !candidate.as_bytes()[0].is_ascii_alphabetic() {
@@ -2599,18 +2518,7 @@ fn print_json(
     println!("{out}");
 }
 
-fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.iter().any(|arg| arg == "--help") {
-        println!("wfetch {}", env!("CARGO_PKG_VERSION"));
-        println!();
-        println!("Usage: wfetch [--json] [--help]");
-        println!();
-        println!("  --json   print as a single line of JSON");
-        println!("  --help   show this message");
-        return;
-    }
-    let json = args.iter().any(|arg| arg == "--json");
+pub(crate) fn gather_info() -> Vec<(String, String)> {
     let hostname = get_hostname();
     let os = get_os_info();
     let kernel = get_kernel();
@@ -2625,7 +2533,146 @@ fn main() {
     let displays = get_displays();
     let disks = get_disks();
     let local_ip = get_local_ip();
+    let mut info: Vec<(String, String)> = Vec::from([
+        ("Hostname".to_string(), hostname),
+        ("OS".to_string(), os),
+        ("Kernel".to_string(), kernel),
+        ("Device".to_string(), device),
+        ("Uptime".to_string(), uptime),
+        ("Shell".to_string(), shell),
+        ("Init".to_string(), init),
+        ("Terminal".to_string(), terminal),
+        ("CPU".to_string(), cpu),
+        ("RAM".to_string(), ram),
+    ]);
+    if gpus.is_empty() {
+        info.push(("GPU".to_string(), "unknown".to_string()));
+    } else if gpus.len() == 1 {
+        info.push(("GPU".to_string(), gpus.into_iter().next().unwrap()));
+    } else {
+        for (i, gpu) in gpus.into_iter().enumerate() {
+            info.push((format!("GPU ({})", i + 1), gpu));
+        }
+    }
+    if displays.is_empty() {
+        info.push(("Display".to_string(), "unknown".to_string()));
+    } else if displays.len() == 1 {
+        let (_, w, h, hz) = &displays[0];
+        info.push(("Display".to_string(), format_resolution(*w, *h, *hz)));
+    } else {
+        for (i, (label, w, h, hz)) in displays.iter().enumerate() {
+            let tag = if label.is_empty() {
+                (i + 1).to_string()
+            } else {
+                label.clone()
+            };
+            info.push((format!("Display ({tag})"), format_resolution(*w, *h, *hz)));
+        }
+    }
+    if disks.is_empty() {
+        info.push(("Disk".to_string(), "unknown".to_string()));
+    } else {
+        for (point, used, total) in &disks {
+            info.push((format!("Disk ({point})"), format_bytes(*used, *total)));
+        }
+    }
+    match &local_ip {
+        Some(line) => match line.split_once(": ") {
+            Some((iface, rest)) => {
+                let iface = iface.trim_start_matches('(').trim_end_matches(')');
+                info.push((format!("Local IP ({iface})"), rest.to_string()));
+            }
+            None => info.push(("Local IP".to_string(), line.clone())),
+        },
+        None => info.push(("Local IP".to_string(), "unknown".to_string())),
+    }
+    info
+}
+
+fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut json = false;
+    let mut plain = false;
+    let mut no_color = false;
+    let mut greyscale = false;
+    let mut configure = false;
+    let mut cli_color_spec: Option<String> = None;
+    let mut cli_font_spec: Option<String> = None;
+    let mut cli_colon: Option<bool> = None;
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].as_str();
+        match arg {
+            "--json" => json = true,
+            "--plain" => plain = true,
+            "--no-color" => no_color = true,
+            "--greyscale" | "--grayscale" => greyscale = true,
+            "--configure" => configure = true,
+            "--label-colon" => cli_colon = Some(true),
+            "--no-label-colon" => cli_colon = Some(false),
+            "--label-color" | "--label-colour" => {
+                i += 1;
+                if let Some(value) = args.get(i) {
+                    cli_color_spec = Some(value.clone());
+                }
+            }
+            "--label-font" => {
+                i += 1;
+                if let Some(value) = args.get(i) {
+                    cli_font_spec = Some(value.clone());
+                }
+            }
+            other => {
+                if let Some(value) = other.strip_prefix("--label-color=") {
+                    cli_color_spec = Some(value.to_string());
+                } else if let Some(value) = other.strip_prefix("--label-colour=") {
+                    cli_color_spec = Some(value.to_string());
+                } else if let Some(value) = other.strip_prefix("--label-font=") {
+                    cli_font_spec = Some(value.to_string());
+                }
+            }
+        }
+        i += 1;
+    }
+    if args.iter().any(|arg| arg == "--help") {
+        println!("wfetch {}", env!("CARGO_PKG_VERSION"));
+        println!();
+        println!("Usage: wfetch [--json] [--configure]");
+        println!("              [--plain | --no-color | --greyscale]");
+        println!("              [--label-color <spec>] [--label-font <spec>] [--help]");
+        println!();
+        println!("  --plain                 no colors and no fonts");
+        println!("  --no-color              keep fonts, use the default color");
+        println!("  --greyscale             keep fonts, turn every color grey");
+        println!("  --label-color <spec>    auto | auto-per-line | none | black | red |");
+        println!("                          green | yellow | blue | magenta | cyan | white |");
+        println!("                          gray | bright-<name> | <0-255> | #rrggbb");
+        println!("  --label-font <spec>     plain | bold | italic | bold-italic");
+        println!("  [--no-]label-colon      include the colon in the label styling");
+        println!("  --configure             interactive label configuration");
+        println!("  --json                  print as a single line of JSON");
+        println!("  --help                  show this message");
+        return;
+    }
+    if configure {
+        tui::run();
+        return;
+    }
     if json {
+        let hostname = get_hostname();
+        let os = get_os_info();
+        let kernel = get_kernel();
+        let device = get_device();
+        let uptime = get_uptime();
+        let shell = get_shell();
+        let init = get_init();
+        let terminal = get_terminal(&shell);
+        let cpu = get_cpu();
+        let ram = get_ram();
+        let gpus = get_gpus();
+        let displays = get_displays();
+        let disks = get_disks();
+        let local_ip = get_local_ip();
         let fields = [
             ("hostname", hostname.as_str()),
             ("os", os.as_str()),
@@ -2641,95 +2688,41 @@ fn main() {
         print_json(&fields, &gpus, &displays, &disks, local_ip.as_ref());
         return;
     }
-    let mut info = Vec::new();
-    info.push(format!("Hostname: {hostname}"));
-    info.push(format!("OS: {os}"));
-    info.push(format!("Kernel: {kernel}"));
-    info.push(format!("Device: {device}"));
-    info.push(format!("Uptime: {uptime}"));
-    info.push(format!("Shell: {shell}"));
-    info.push(format!("Init: {init}"));
-    info.push(format!("Terminal: {terminal}"));
-    info.push(format!("CPU: {cpu}"));
-    info.push(format!("RAM: {ram}"));
-    if gpus.is_empty() {
-        info.push("GPU: unknown".to_string());
-    } else if gpus.len() == 1 {
-        info.push(format!("GPU: {}", gpus[0]));
-    } else {
-        for (i, gpu) in gpus.iter().enumerate() {
-            info.push(format!("GPU ({}): {}", i + 1, gpu));
+    let mut cli_color = None;
+    if let Some(spec) = &cli_color_spec
+        && !spec.is_empty()
+    {
+        match parse_color(spec) {
+            Some(color) => cli_color = Some(color),
+            None => eprintln!("wfetch: invalid --label-color value {spec:?}"),
         }
     }
-    if displays.is_empty() {
-        info.push("Display: unknown".to_string());
-    } else if displays.len() == 1 {
-        let (_, w, h, hz) = &displays[0];
-        info.push(format!("Display: {}", format_resolution(*w, *h, *hz)));
-    } else {
-        for (i, (label, w, h, hz)) in displays.iter().enumerate() {
-            let tag = if label.is_empty() {
-                (i + 1).to_string()
-            } else {
-                label.clone()
-            };
-            info.push(format!(
-                "Display ({}): {}",
-                tag,
-                format_resolution(*w, *h, *hz)
-            ));
+    let mut cli_font = None;
+    if let Some(spec) = &cli_font_spec
+        && !spec.is_empty()
+    {
+        match parse_font(spec) {
+            Some(font) => cli_font = Some(font),
+            None => eprintln!("wfetch: invalid --label-font value {spec:?}"),
         }
     }
-    if disks.is_empty() {
-        info.push("Disk: unknown".to_string());
+    let config = config::load();
+    let style = LabelStyle {
+        color: cli_color.or(config.label_color).unwrap_or(LabelColor::Auto),
+        font: cli_font.or(config.label_font).unwrap_or(LabelFont::Bold),
+        colon: cli_colon.or(config.label_colon).unwrap_or(true),
+    };
+    let mode = if plain {
+        ColorMode::Plain
+    } else if no_color {
+        ColorMode::NoColor
+    } else if greyscale {
+        ColorMode::Greyscale
     } else {
-        for (point, used, total) in &disks {
-            info.push(format!("Disk ({}): {}", point, format_bytes(*used, *total)));
-        }
-    }
-    match &local_ip {
-        Some(line) => info.push(format!("Local IP {line}")),
-        None => info.push("Local IP: unknown".to_string()),
-    }
+        ColorMode::Normal
+    };
     let logo = select_platform_logo();
     let colorize = colors_enabled();
-    let mut carry = String::new();
-    if colorize && let Some(base) = logo.colors.first() {
-        carry.push_str(base);
-    }
-    let width = logo
-        .art
-        .iter()
-        .map(|line| logo_visible_width(line))
-        .max()
-        .unwrap_or(0);
-    let rows = logo.art.len().max(info.len());
-    for i in 0..rows {
-        match (logo.art.get(i), info.get(i)) {
-            (Some(art), Some(text)) => {
-                let mut line = String::new();
-                paint_logo_line(art, logo.colors, &mut carry, colorize, &mut line);
-                let pad = width.saturating_sub(logo_visible_width(art));
-                for _ in 0..pad {
-                    line.push(' ');
-                }
-                line.push_str("  ");
-                line.push_str(text);
-                println!("{line}");
-            }
-            (Some(art), None) => {
-                let mut line = String::new();
-                paint_logo_line(art, logo.colors, &mut carry, colorize, &mut line);
-                println!("{line}");
-            }
-            (None, Some(text)) => {
-                if width == 0 {
-                    println!("{text}");
-                } else {
-                    println!("{:width$}  {text}", "", width = width);
-                }
-            }
-            (None, None) => {}
-        }
-    }
+    let opts = RenderOptions { mode, style };
+    print!("{}", render(logo, &gather_info(), colorize, &opts));
 }
