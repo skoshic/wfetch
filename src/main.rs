@@ -17,7 +17,8 @@ mod tui;
 
 use logos::{LOGO_UNKNOWN, LOGOS, LogoEntry};
 use style::{
-    ColorMode, LabelColor, LabelFont, LabelStyle, RenderOptions, parse_color, parse_font, render,
+    Align, ColorMode, LabelColor, LabelFont, LabelStyle, RenderOptions, parse_align, parse_color,
+    parse_font, render,
 };
 
 unsafe extern "C" {
@@ -2598,6 +2599,7 @@ fn main() {
     let mut configure = false;
     let mut cli_color_spec: Option<String> = None;
     let mut cli_font_spec: Option<String> = None;
+    let mut cli_align_spec: Option<String> = None;
     let mut cli_colon: Option<bool> = None;
     let mut i = 0;
     while i < args.len() {
@@ -2622,6 +2624,12 @@ fn main() {
                     cli_font_spec = Some(value.clone());
                 }
             }
+            "--align" => {
+                i += 1;
+                if let Some(value) = args.get(i) {
+                    cli_align_spec = Some(value.clone());
+                }
+            }
             other => {
                 if let Some(value) = other.strip_prefix("--label-color=") {
                     cli_color_spec = Some(value.to_string());
@@ -2629,6 +2637,8 @@ fn main() {
                     cli_color_spec = Some(value.to_string());
                 } else if let Some(value) = other.strip_prefix("--label-font=") {
                     cli_font_spec = Some(value.to_string());
+                } else if let Some(value) = other.strip_prefix("--align=") {
+                    cli_align_spec = Some(value.to_string());
                 }
             }
         }
@@ -2640,6 +2650,7 @@ fn main() {
         println!("Usage: wfetch [--json] [--configure]");
         println!("              [--plain | --no-color | --greyscale]");
         println!("              [--label-color <spec>] [--label-font <spec>] [--help]");
+        println!("              [--align <spec>]");
         println!();
         println!("  --plain                 no colors and no fonts");
         println!("  --no-color              keep fonts, use the default color");
@@ -2649,6 +2660,8 @@ fn main() {
         println!("                          gray | bright-<name> | <0-255> | #rrggbb");
         println!("  --label-font <spec>     plain | bold | italic | bold-italic");
         println!("  [--no-]label-colon      include the colon in the label styling");
+        println!("  --align <spec>          top | center | bottom vertical placement");
+        println!("                          of the info next to the logo");
         println!("  --configure             interactive label configuration");
         println!("  --json                  print as a single line of JSON");
         println!("  --help                  show this message");
@@ -2706,12 +2719,22 @@ fn main() {
             None => eprintln!("wfetch: invalid --label-font value {spec:?}"),
         }
     }
+    let mut cli_align = None;
+    if let Some(spec) = &cli_align_spec
+        && !spec.is_empty()
+    {
+        match parse_align(spec) {
+            Some(align) => cli_align = Some(align),
+            None => eprintln!("wfetch: invalid --align value {spec:?}"),
+        }
+    }
     let config = config::load();
     let style = LabelStyle {
         color: cli_color.or(config.label_color).unwrap_or(LabelColor::Auto),
         font: cli_font.or(config.label_font).unwrap_or(LabelFont::Bold),
         colon: cli_colon.or(config.label_colon).unwrap_or(true),
     };
+    let align = cli_align.or(config.info_align).unwrap_or(Align::Top);
     let mode = if plain {
         ColorMode::Plain
     } else if no_color {
@@ -2723,6 +2746,6 @@ fn main() {
     };
     let logo = select_platform_logo();
     let colorize = colors_enabled();
-    let opts = RenderOptions { mode, style };
+    let opts = RenderOptions { mode, style, align };
     print!("{}", render(logo, &gather_info(), colorize, &opts));
 }

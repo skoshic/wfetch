@@ -26,6 +26,13 @@ pub enum LabelFont {
     BoldItalic,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Align {
+    Top,
+    Center,
+    Bottom,
+}
+
 #[derive(Clone, Copy)]
 pub struct LabelStyle {
     pub color: LabelColor,
@@ -36,6 +43,7 @@ pub struct LabelStyle {
 pub struct RenderOptions {
     pub mode: ColorMode,
     pub style: LabelStyle,
+    pub align: Align,
 }
 
 pub fn render(
@@ -56,7 +64,14 @@ pub fn render(
         .map(|line| logo_visible_width(line))
         .max()
         .unwrap_or(0);
-    let rows = logo.art.len().max(info.len());
+    let logo_rows = logo.art.len();
+    let info_rows = info.len();
+    let offset = match opts.align {
+        Align::Top => 0,
+        Align::Center => logo_rows.saturating_sub(info_rows) / 2,
+        Align::Bottom => logo_rows.saturating_sub(info_rows),
+    };
+    let rows = logo_rows.max(info_rows);
     let mut carry = String::new();
     if let Some(base) = logo.colors.first() {
         carry.push_str(base);
@@ -64,7 +79,10 @@ pub fn render(
     let mut out = String::new();
     for i in 0..rows {
         let art = logo.art.get(i);
-        let text = info.get(i);
+        let text = match i.checked_sub(offset) {
+            Some(index) if index < info_rows => info.get(index),
+            _ => None,
+        };
         let mut line = String::new();
         if let Some(art) = art {
             paint_logo_line(art, logo.colors, &mut carry, mode, &mut line);
@@ -157,6 +175,23 @@ pub fn parse_font(spec: &str) -> Option<LabelFont> {
             Some(LabelFont::BoldItalic)
         }
         _ => None,
+    }
+}
+
+pub fn parse_align(spec: &str) -> Option<Align> {
+    match spec.trim().to_ascii_lowercase().as_str() {
+        "top" | "start" | "up" => Some(Align::Top),
+        "center" | "centre" | "middle" | "mid" => Some(Align::Center),
+        "bottom" | "end" | "down" => Some(Align::Bottom),
+        _ => None,
+    }
+}
+
+pub fn align_spec(align: Align) -> &'static str {
+    match align {
+        Align::Top => "top",
+        Align::Center => "center",
+        Align::Bottom => "bottom",
     }
 }
 
@@ -678,6 +713,7 @@ mod tests {
         ];
         let opts = RenderOptions {
             mode: ColorMode::Normal,
+            align: Align::Top,
             style: LabelStyle {
                 color: LabelColor::AutoPerLine,
                 font: LabelFont::Bold,
@@ -699,6 +735,7 @@ mod tests {
         let info = vec![("Hostname".to_string(), "mac".to_string())];
         let opts = RenderOptions {
             mode: ColorMode::Normal,
+            align: Align::Top,
             style: LabelStyle {
                 color: LabelColor::Named(36),
                 font: LabelFont::Bold,
@@ -719,6 +756,7 @@ mod tests {
         let info = vec![("Hostname".to_string(), "mac".to_string())];
         let opts = RenderOptions {
             mode: ColorMode::Normal,
+            align: Align::Top,
             style: LabelStyle {
                 color: LabelColor::Named(36),
                 font: LabelFont::Bold,
@@ -750,6 +788,7 @@ mod tests {
         let info = vec![("Hostname".to_string(), "mac".to_string())];
         let opts = RenderOptions {
             mode: ColorMode::Normal,
+            align: Align::Top,
             style: LabelStyle {
                 color: LabelColor::Auto,
                 font: LabelFont::Bold,
@@ -758,5 +797,79 @@ mod tests {
         };
         let out = render(&LOGO, &info, false, &opts);
         assert_eq!(out, "xxxxx  Hostname: mac\n");
+    }
+
+    #[test]
+    fn parses_aligns() {
+        assert_eq!(parse_align("top"), Some(Align::Top));
+        assert_eq!(parse_align("START"), Some(Align::Top));
+        assert_eq!(parse_align("center"), Some(Align::Center));
+        assert_eq!(parse_align("centre"), Some(Align::Center));
+        assert_eq!(parse_align("middle"), Some(Align::Center));
+        assert_eq!(parse_align("bottom"), Some(Align::Bottom));
+        assert_eq!(parse_align("end"), Some(Align::Bottom));
+        assert_eq!(parse_align("sideways"), None);
+        assert_eq!(align_spec(Align::Top), "top");
+        assert_eq!(align_spec(Align::Center), "center");
+        assert_eq!(align_spec(Align::Bottom), "bottom");
+    }
+
+    #[test]
+    fn aligns_info_against_logo() {
+        static LOGO: LogoEntry = LogoEntry {
+            names: &["test"],
+            colors: &["\u{1b}[36m"],
+            art: &["aaaaa", "bbbbb", "ccccc", "ddddd", "eeeee"],
+        };
+        let info = vec![("Hostname".to_string(), "mac".to_string())];
+        let style = LabelStyle {
+            color: LabelColor::Auto,
+            font: LabelFont::Bold,
+            colon: true,
+        };
+        let expected = |index: usize| {
+            let mut lines = ["aaaaa", "bbbbb", "ccccc", "ddddd", "eeeee"];
+            lines[index] = match index {
+                0 => "aaaaa  Hostname: mac",
+                2 => "ccccc  Hostname: mac",
+                4 => "eeeee  Hostname: mac",
+                _ => lines[index],
+            };
+            let mut out = lines.join("\n");
+            out.push('\n');
+            out
+        };
+        for (align, index) in [(Align::Top, 0), (Align::Center, 2), (Align::Bottom, 4)] {
+            let opts = RenderOptions {
+                mode: ColorMode::Plain,
+                align,
+                style,
+            };
+            assert_eq!(render(&LOGO, &info, false, &opts), expected(index));
+        }
+    }
+
+    #[test]
+    fn align_ignores_taller_info() {
+        static LOGO: LogoEntry = LogoEntry {
+            names: &["test"],
+            colors: &["\u{1b}[36m"],
+            art: &["aaaaa"],
+        };
+        let info = vec![
+            ("Hostname".to_string(), "mac".to_string()),
+            ("OS".to_string(), "test".to_string()),
+        ];
+        let opts = RenderOptions {
+            mode: ColorMode::Plain,
+            align: Align::Bottom,
+            style: LabelStyle {
+                color: LabelColor::Auto,
+                font: LabelFont::Bold,
+                colon: true,
+            },
+        };
+        let out = render(&LOGO, &info, false, &opts);
+        assert_eq!(out, "aaaaa  Hostname: mac\n       OS: test\n");
     }
 }

@@ -2,8 +2,8 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 use crate::style::{
-    ColorMode, LabelColor, LabelFont, LabelStyle, RenderOptions, bool_spec, color_spec, font_spec,
-    render,
+    Align, ColorMode, LabelColor, LabelFont, LabelStyle, RenderOptions, align_spec, bool_spec,
+    color_spec, font_spec, render,
 };
 use crate::{config, gather_info, select_platform_logo};
 
@@ -168,6 +168,7 @@ pub fn run() {
     let color = config.label_color.unwrap_or(LabelColor::Auto);
     let font = config.label_font.unwrap_or(LabelFont::Bold);
     let colon = config.label_colon.unwrap_or(true);
+    let align = config.info_align.unwrap_or(Align::Top);
     let mut colors = vec![
         LabelColor::Auto,
         LabelColor::AutoPerLine,
@@ -196,17 +197,19 @@ pub fn run() {
         fonts.push(font);
     }
     let colons = [false, true];
+    let aligns = [Align::Top, Align::Center, Align::Bottom];
     let mut color_index = colors.iter().position(|c| *c == color).unwrap_or(0);
     let mut font_index = fonts.iter().position(|f| *f == font).unwrap_or(1);
     let mut colon_index = colons.iter().position(|c| *c == colon).unwrap_or(1);
+    let mut align_index = aligns.iter().position(|a| *a == align).unwrap_or(0);
     let mut row = 0;
-    let rows_len = 3;
+    let rows_len = 4;
     let config_path = config::config_path()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| "~/.config/wfetch/config".to_string());
     let _terminal = RawTerminal::enable();
     let mut stdout = std::io::stdout();
-    let mut result: Option<LabelStyle> = None;
+    let mut result: Option<(LabelStyle, Align)> = None;
     loop {
         let style = LabelStyle {
             color: colors[color_index],
@@ -220,12 +223,14 @@ pub fn run() {
             &RenderOptions {
                 mode: ColorMode::Normal,
                 style,
+                align: aligns[align_index],
             },
         );
         let menu = [
             ("Label color", color_spec(colors[color_index])),
             ("Label font", font_spec(fonts[font_index]).to_string()),
             ("Label colon", bool_spec(colons[colon_index]).to_string()),
+            ("Info align", align_spec(aligns[align_index]).to_string()),
         ];
         let mut screen = String::from("\u{1b}[2J\u{1b}[H");
         screen.push_str("wfetch configuration\r\n\r\n");
@@ -254,11 +259,12 @@ pub fn run() {
                     0 => color_index = cycle(color_index, colors.len(), delta),
                     1 => font_index = cycle(font_index, fonts.len(), delta),
                     2 => colon_index = cycle(colon_index, colons.len(), delta),
+                    3 => align_index = cycle(align_index, aligns.len(), delta),
                     _ => {}
                 }
             }
             Key::Save => {
-                result = Some(style);
+                result = Some((style, aligns[align_index]));
                 break;
             }
             Key::Quit => break,
@@ -266,8 +272,8 @@ pub fn run() {
         }
     }
     drop(_terminal);
-    if let Some(style) = result {
-        match config::save(&style) {
+    if let Some((style, align)) = result {
+        match config::save(&style, align) {
             Ok(path) => println!("wfetch: saved configuration to {}", path.display()),
             Err(err) => eprintln!("wfetch: {err}"),
         }

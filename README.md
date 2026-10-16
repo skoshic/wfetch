@@ -75,6 +75,7 @@ After installing it to your PATH you can simply run it with `wfetch`.
 ```sh
 wfetch --label-color cyan --label-font italic   # style this run
 wfetch --no-label-colon                         # print the colon plain
+wfetch --align center                           # place the info block centered
 wfetch --no-color                               # keep fonts, use the default color
 wfetch --greyscale                              # keep fonts, turn every color grey
 wfetch --plain                                  # no colors and no fonts
@@ -95,6 +96,9 @@ wfetch reads `~/.config/wfetch/config`:
 color = auto
 font = bold
 colon = yes
+
+[info]
+align = top
 ```
 
 `color` accepts `auto` (the logo's primary color), `auto-per-line` (each label
@@ -106,6 +110,9 @@ takes the color of the logo part next to it), `none`, a color name
 
 `colon` accepts `yes` (the colon shares the label's font and color, the
 default) or `no` (the colon is printed plain).
+
+`align` accepts `top` (the default), `center`, or `bottom` and controls where
+the info block sits vertically next to the logo.
 
 Precedence:
 - Flags beat config

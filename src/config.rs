@@ -1,13 +1,15 @@
 use std::path::PathBuf;
 
 use crate::style::{
-    LabelColor, LabelFont, bool_spec, color_spec, font_spec, parse_bool, parse_color, parse_font,
+    Align, LabelColor, LabelFont, align_spec, bool_spec, color_spec, font_spec, parse_align,
+    parse_bool, parse_color, parse_font,
 };
 
 pub struct Config {
     pub label_color: Option<LabelColor>,
     pub label_font: Option<LabelFont>,
     pub label_colon: Option<bool>,
+    pub info_align: Option<Align>,
 }
 
 pub fn load() -> Config {
@@ -15,6 +17,7 @@ pub fn load() -> Config {
         label_color: None,
         label_font: None,
         label_colon: None,
+        info_align: None,
     };
     let Some(path) = config_path() else {
         return empty;
@@ -31,17 +34,18 @@ pub fn load() -> Config {
     }
 }
 
-pub fn save(style: &crate::style::LabelStyle) -> Result<PathBuf, String> {
+pub fn save(style: &crate::style::LabelStyle, align: Align) -> Result<PathBuf, String> {
     let path = config_path().ok_or_else(|| "could not resolve config directory".to_string())?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("could not create {}: {e}", parent.display()))?;
     }
     let content = format!(
-        "[label]\ncolor = {}\nfont = {}\ncolon = {}\n",
+        "[label]\ncolor = {}\nfont = {}\ncolon = {}\n\n[info]\nalign = {}\n",
         color_spec(style.color),
         font_spec(style.font),
-        bool_spec(style.colon)
+        bool_spec(style.colon),
+        align_spec(align)
     );
     std::fs::write(&path, content)
         .map_err(|e| format!("could not write {}: {e}", path.display()))?;
@@ -71,6 +75,7 @@ fn parse(content: &str) -> Result<Config, String> {
         label_color: None,
         label_font: None,
         label_colon: None,
+        info_align: None,
     };
     let mut section: Option<String> = None;
     for (index, raw) in content.lines().enumerate() {
@@ -82,7 +87,7 @@ fn parse(content: &str) -> Result<Config, String> {
             match rest.strip_suffix(']') {
                 Some(name) => {
                     let name = name.trim().to_ascii_lowercase();
-                    if name != "label" {
+                    if name != "label" && name != "info" {
                         return Err(format!("unknown section [{name}] on line {}", index + 1));
                     }
                     section = Some(name);
@@ -118,7 +123,16 @@ fn parse(content: &str) -> Result<Config, String> {
                 },
                 _ => return Err(format!("unknown key {key:?} on line {}", index + 1)),
             },
-            _ => return Err(format!("key outside of [label] on line {}", index + 1)),
+            Some("info") => match key.as_str() {
+                "align" => match parse_align(value) {
+                    Some(align) => config.info_align = Some(align),
+                    None => {
+                        return Err(format!("invalid align {value:?} on line {}", index + 1));
+                    }
+                },
+                _ => return Err(format!("unknown key {key:?} on line {}", index + 1)),
+            },
+            _ => return Err(format!("key outside of a section on line {}", index + 1)),
         }
     }
     Ok(config)
@@ -147,6 +161,21 @@ mod tests {
         let config = parse("[label]\ncolor = auto\nfont = bold\n").unwrap();
         assert_eq!(config.label_color, Some(LabelColor::Auto));
         assert_eq!(config.label_font, Some(crate::style::LabelFont::Bold));
+    }
+
+    #[test]
+    fn parses_info_section() {
+        let config = parse("[info]\nalign = center\n").unwrap();
+        assert_eq!(config.info_align, Some(Align::Center));
+        let config = parse("[label]\ncolor = auto\n[info]\nalign = bottom\n").unwrap();
+        assert_eq!(config.label_color, Some(LabelColor::Auto));
+        assert_eq!(config.info_align, Some(Align::Bottom));
+    }
+
+    #[test]
+    fn rejects_bad_align() {
+        assert!(parse("[info]\nalign = sideways\n").is_err());
+        assert!(parse("[info]\ncolour = red\n").is_err());
     }
 
     #[test]
