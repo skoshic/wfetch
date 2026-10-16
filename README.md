@@ -76,6 +76,8 @@ After installing it to your PATH you can simply run it with `wfetch`.
 wfetch --label-color cyan --label-font italic   # style this run
 wfetch --no-label-colon                         # print the colon plain
 wfetch --align center                           # place the info block centered
+wfetch --theme round                            # draw the info as a box
+wfetch --border-color cyan                      # color the theme border
 wfetch --no-color                               # keep fonts, use the default color
 wfetch --greyscale                              # keep fonts, turn every color grey
 wfetch --plain                                  # no colors and no fonts
@@ -99,6 +101,8 @@ colon = yes
 
 [info]
 align = top
+theme = plain
+border-color = none
 ```
 
 `color` accepts `auto` (the logo's primary color), `auto-per-line` (each label
@@ -113,6 +117,75 @@ default) or `no` (the colon is printed plain).
 
 `align` accepts `top` (the default), `center`, or `bottom` and controls where
 the info block sits vertically next to the logo.
+
+`theme` accepts `plain` (the default), `tree`, `dots`, `bar`, `arrow`,
+`diamond`, `block`, `pipe`, `round`, `square`, `double`, `ascii`, `bold`,
+`column`, `groups`, `title`, `outline`, `dotted`, `grid` or `compact`
+and controls how the info block is drawn:
+
+```text
+plain              tree                dots              bar
+Hostname: mac      ├─ Hostname: mac     ● Hostname: mac    ▌ Hostname: mac
+OS: macOS          ╰─ OS: macOS         ● OS: macOS        ▌ OS: macOS
+
+arrow              diamond             block             pipe
+→ Hostname: mac    ◆ Hostname: mac      █ Hostname: mac     │ Hostname: mac
+→ OS: macOS        ◆ OS: macOS          █ OS: macOS         │ OS: macOS
+
+round                       square                      double
+╭───────────────╮           ┌───────────────┐           ╔═══════════════╗
+│ Hostname: mac │           │ Hostname: mac │           ║ Hostname: mac ║
+│ OS: macOS     │           │ OS: macOS     │           ║ OS: macOS     ║
+╰───────────────╯           └───────────────┘           ╚═══════════════╝
+
+bold                        ascii                       column
+┏━━━━━━━━━━━━━━━┓           +---------------+                       │ Hostname: mac
+┃ Hostname: mac ┃           | Hostname: mac |                       │ OS: macOS
+┃ OS: macOS     ┃           | OS: macOS     |
+┗━━━━━━━━━━━━━━━┛           +---------------+
+
+groups
+├─ OS: macOS
+├─ Kernel: Darwin
+│
+├─ Shell: btsh
+└─ CPU: Apple M5
+
+title
+mac
+────────
+OS: macOS
+Kernel: Darwin
+
+outline
+┌─ System ────────
+│ OS: macOS
+│ Kernel: Darwin
+┌─ Software ──────
+│ Shell: btsh
+
+dotted
+Hostname .... mac
+OS .......... macOS
+
+grid
+┌──────────┬────────┐
+│ Hostname │ mac    │
+│ OS       │ macOS  │
+└──────────┴────────┘
+
+compact
+Hostname mac
+OS macOS
+```
+
+`border-color` accepts the same values as `color` and styles the theme's
+decoration: the frame of the box themes (`round`, `square`, `double`, `ascii`,
+`bold`, `grid`) and the prefix of `tree`, `dots`, `bar`, `arrow`, `diamond`,
+`block`, `pipe`, `groups`, `outline`, `dotted` plus the rule of `title`.
+It supports `auto-per-line` like `color`, so each row's decoration
+can take the color of the logo line beside it. It defaults to `none`, which
+leaves the decoration unstyled.
 
 Precedence:
 - Flags beat config

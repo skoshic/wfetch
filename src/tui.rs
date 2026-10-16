@@ -2,8 +2,8 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 use crate::style::{
-    Align, ColorMode, LabelColor, LabelFont, LabelStyle, RenderOptions, align_spec, bool_spec,
-    color_spec, font_spec, render,
+    Align, ColorMode, InfoTheme, LabelColor, LabelFont, LabelStyle, RenderOptions, align_spec,
+    bool_spec, color_spec, font_spec, render, theme_spec,
 };
 use crate::{config, gather_info, select_platform_logo};
 
@@ -27,6 +27,7 @@ enum Key {
     Down,
     Left,
     Right,
+    Reset,
     Save,
     Quit,
     Unknown,
@@ -110,6 +111,7 @@ fn read_key() -> Key {
     match byte {
         b'q' | 3 => Key::Quit,
         b's' => Key::Save,
+        b'r' | b'R' => Key::Reset,
         b'j' => Key::Down,
         b'k' => Key::Up,
         b'h' => Key::Left,
@@ -169,6 +171,8 @@ pub fn run() {
     let font = config.label_font.unwrap_or(LabelFont::Bold);
     let colon = config.label_colon.unwrap_or(true);
     let align = config.info_align.unwrap_or(Align::Top);
+    let theme = config.info_theme.unwrap_or(InfoTheme::Plain);
+    let border = config.info_border_color.unwrap_or(LabelColor::Plain);
     let mut colors = vec![
         LabelColor::Auto,
         LabelColor::AutoPerLine,
@@ -187,6 +191,9 @@ pub fn run() {
     if !colors.contains(&color) {
         colors.push(color);
     }
+    if !colors.contains(&border) {
+        colors.push(border);
+    }
     let mut fonts = vec![
         LabelFont::Plain,
         LabelFont::Bold,
@@ -197,19 +204,43 @@ pub fn run() {
         fonts.push(font);
     }
     let colons = [false, true];
+    let themes = [
+        InfoTheme::Plain,
+        InfoTheme::Tree,
+        InfoTheme::Dots,
+        InfoTheme::Bar,
+        InfoTheme::Arrow,
+        InfoTheme::Diamond,
+        InfoTheme::Block,
+        InfoTheme::Pipe,
+        InfoTheme::Round,
+        InfoTheme::Square,
+        InfoTheme::Double,
+        InfoTheme::Ascii,
+        InfoTheme::Bold,
+        InfoTheme::Column,
+        InfoTheme::Groups,
+        InfoTheme::Title,
+        InfoTheme::Outline,
+        InfoTheme::Dotted,
+        InfoTheme::Grid,
+        InfoTheme::Compact,
+    ];
     let aligns = [Align::Top, Align::Center, Align::Bottom];
     let mut color_index = colors.iter().position(|c| *c == color).unwrap_or(0);
     let mut font_index = fonts.iter().position(|f| *f == font).unwrap_or(1);
     let mut colon_index = colons.iter().position(|c| *c == colon).unwrap_or(1);
+    let mut theme_index = themes.iter().position(|t| *t == theme).unwrap_or(0);
+    let mut border_index = colors.iter().position(|c| *c == border).unwrap_or(0);
     let mut align_index = aligns.iter().position(|a| *a == align).unwrap_or(0);
     let mut row = 0;
-    let rows_len = 4;
+    let rows_len = 6;
     let config_path = config::config_path()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| "~/.config/wfetch/config".to_string());
     let _terminal = RawTerminal::enable();
     let mut stdout = std::io::stdout();
-    let mut result: Option<(LabelStyle, Align)> = None;
+    let mut result: Option<(LabelStyle, InfoTheme, LabelColor, Align)> = None;
     loop {
         let style = LabelStyle {
             color: colors[color_index],
@@ -224,12 +255,16 @@ pub fn run() {
                 mode: ColorMode::Normal,
                 style,
                 align: aligns[align_index],
+                theme: themes[theme_index],
+                border_color: colors[border_index],
             },
         );
         let menu = [
             ("Label color", color_spec(colors[color_index])),
             ("Label font", font_spec(fonts[font_index]).to_string()),
             ("Label colon", bool_spec(colons[colon_index]).to_string()),
+            ("Info theme", theme_spec(themes[theme_index]).to_string()),
+            ("Border color", color_spec(colors[border_index])),
             ("Info align", align_spec(aligns[align_index]).to_string()),
         ];
         let mut screen = String::from("\u{1b}[2J\u{1b}[H");
@@ -240,10 +275,10 @@ pub fn run() {
             } else {
                 " "
             };
-            screen.push_str(&format!("{marker} {key:<12} {value}\r\n"));
+            screen.push_str(&format!("{marker} {key:<13} {value}\r\n"));
         }
         screen.push_str("\r\n");
-        screen.push_str("\u{1b}[2mup/down select, left/right change, s save, q quit\u{1b}[m\r\n");
+        screen.push_str("\u{1b}[2mup/down select, left/right change, r reset, s save, q quit\u{1b}[m\r\n");
         screen.push_str(&format!("\u{1b}[2mconfig: {config_path}\u{1b}[m\r\n"));
         screen.push_str("\u{1b}[2mpreview: \u{1b}[m\r\n");
         screen.push_str(&preview.replace('\n', "\r\n"));
@@ -259,12 +294,58 @@ pub fn run() {
                     0 => color_index = cycle(color_index, colors.len(), delta),
                     1 => font_index = cycle(font_index, fonts.len(), delta),
                     2 => colon_index = cycle(colon_index, colons.len(), delta),
-                    3 => align_index = cycle(align_index, aligns.len(), delta),
+                    3 => theme_index = cycle(theme_index, themes.len(), delta),
+                    4 => border_index = cycle(border_index, colors.len(), delta),
+                    5 => align_index = cycle(align_index, aligns.len(), delta),
                     _ => {}
                 }
             }
+            Key::Reset => match row {
+                0 => {
+                    color_index = colors
+                        .iter()
+                        .position(|c| *c == LabelColor::Auto)
+                        .unwrap_or(color_index)
+                }
+                1 => {
+                    font_index = fonts
+                        .iter()
+                        .position(|f| *f == LabelFont::Bold)
+                        .unwrap_or(font_index)
+                }
+                2 => {
+                    colon_index = colons
+                        .iter()
+                        .position(|c| *c)
+                        .unwrap_or(colon_index)
+                }
+                3 => {
+                    theme_index = themes
+                        .iter()
+                        .position(|t| *t == InfoTheme::Plain)
+                        .unwrap_or(theme_index)
+                }
+                4 => {
+                    border_index = colors
+                        .iter()
+                        .position(|c| *c == LabelColor::Plain)
+                        .unwrap_or(border_index)
+                }
+                5 => {
+                    align_index = aligns
+                        .iter()
+                        .position(|a| *a == Align::Top)
+                        .unwrap_or(align_index)
+                }
+                _ => {}
+            },
             Key::Save => {
-                result = Some((style, aligns[align_index]));
+                result = Some((
+                    style,
+                    themes[theme_index],
+                    colors[border_index],
+                    aligns[align_index],
+                ));
                 break;
             }
             Key::Quit => break,
@@ -272,8 +353,8 @@ pub fn run() {
         }
     }
     drop(_terminal);
-    if let Some((style, align)) = result {
-        match config::save(&style, align) {
+    if let Some((style, theme, border_color, align)) = result {
+        match config::save(&style, align, theme, border_color) {
             Ok(path) => println!("wfetch: saved configuration to {}", path.display()),
             Err(err) => eprintln!("wfetch: {err}"),
         }

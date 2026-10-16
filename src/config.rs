@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use crate::style::{
-    Align, LabelColor, LabelFont, align_spec, bool_spec, color_spec, font_spec, parse_align,
-    parse_bool, parse_color, parse_font,
+    Align, InfoTheme, LabelColor, LabelFont, align_spec, bool_spec, color_spec, font_spec,
+    parse_align, parse_bool, parse_color, parse_font, parse_theme, theme_spec,
 };
 
 pub struct Config {
@@ -10,6 +10,8 @@ pub struct Config {
     pub label_font: Option<LabelFont>,
     pub label_colon: Option<bool>,
     pub info_align: Option<Align>,
+    pub info_theme: Option<InfoTheme>,
+    pub info_border_color: Option<LabelColor>,
 }
 
 pub fn load() -> Config {
@@ -18,6 +20,8 @@ pub fn load() -> Config {
         label_font: None,
         label_colon: None,
         info_align: None,
+        info_theme: None,
+        info_border_color: None,
     };
     let Some(path) = config_path() else {
         return empty;
@@ -34,18 +38,25 @@ pub fn load() -> Config {
     }
 }
 
-pub fn save(style: &crate::style::LabelStyle, align: Align) -> Result<PathBuf, String> {
+pub fn save(
+    style: &crate::style::LabelStyle,
+    align: Align,
+    theme: InfoTheme,
+    border_color: LabelColor,
+) -> Result<PathBuf, String> {
     let path = config_path().ok_or_else(|| "could not resolve config directory".to_string())?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("could not create {}: {e}", parent.display()))?;
     }
     let content = format!(
-        "[label]\ncolor = {}\nfont = {}\ncolon = {}\n\n[info]\nalign = {}\n",
+        "[label]\ncolor = {}\nfont = {}\ncolon = {}\n\n[info]\nalign = {}\ntheme = {}\nborder-color = {}\n",
         color_spec(style.color),
         font_spec(style.font),
         bool_spec(style.colon),
-        align_spec(align)
+        align_spec(align),
+        theme_spec(theme),
+        color_spec(border_color)
     );
     std::fs::write(&path, content)
         .map_err(|e| format!("could not write {}: {e}", path.display()))?;
@@ -76,6 +87,8 @@ fn parse(content: &str) -> Result<Config, String> {
         label_font: None,
         label_colon: None,
         info_align: None,
+        info_theme: None,
+        info_border_color: None,
     };
     let mut section: Option<String> = None;
     for (index, raw) in content.lines().enumerate() {
@@ -130,6 +143,21 @@ fn parse(content: &str) -> Result<Config, String> {
                         return Err(format!("invalid align {value:?} on line {}", index + 1));
                     }
                 },
+                "theme" => match parse_theme(value) {
+                    Some(theme) => config.info_theme = Some(theme),
+                    None => {
+                        return Err(format!("invalid theme {value:?} on line {}", index + 1));
+                    }
+                },
+                "border-color" | "border-colour" => match parse_color(value) {
+                    Some(color) => config.info_border_color = Some(color),
+                    None => {
+                        return Err(format!(
+                            "invalid border-color {value:?} on line {}",
+                            index + 1
+                        ));
+                    }
+                },
                 _ => return Err(format!("unknown key {key:?} on line {}", index + 1)),
             },
             _ => return Err(format!("key outside of a section on line {}", index + 1)),
@@ -176,6 +204,22 @@ mod tests {
     fn rejects_bad_align() {
         assert!(parse("[info]\nalign = sideways\n").is_err());
         assert!(parse("[info]\ncolour = red\n").is_err());
+    }
+
+    #[test]
+    fn parses_info_theme_and_border() {
+        let config = parse("[info]\ntheme = round\nborder-color = cyan\n").unwrap();
+        assert_eq!(config.info_theme, Some(InfoTheme::Round));
+        assert_eq!(config.info_border_color, Some(LabelColor::Named(36)));
+        let config = parse("[info]\ntheme = tree\nborder-colour = #ff0000\n").unwrap();
+        assert_eq!(config.info_theme, Some(InfoTheme::Tree));
+        assert_eq!(config.info_border_color, Some(LabelColor::Rgb(255, 0, 0)));
+    }
+
+    #[test]
+    fn rejects_bad_theme_and_border() {
+        assert!(parse("[info]\ntheme = nope\n").is_err());
+        assert!(parse("[info]\nborder-color = nope\n").is_err());
     }
 
     #[test]

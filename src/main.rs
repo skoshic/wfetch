@@ -17,8 +17,8 @@ mod tui;
 
 use logos::{LOGO_UNKNOWN, LOGOS, LogoEntry};
 use style::{
-    Align, ColorMode, LabelColor, LabelFont, LabelStyle, RenderOptions, parse_align, parse_color,
-    parse_font, render,
+    Align, ColorMode, InfoTheme, LabelColor, LabelFont, LabelStyle, RenderOptions, parse_align,
+    parse_color, parse_font, parse_theme, render,
 };
 
 unsafe extern "C" {
@@ -2600,6 +2600,8 @@ fn main() {
     let mut cli_color_spec: Option<String> = None;
     let mut cli_font_spec: Option<String> = None;
     let mut cli_align_spec: Option<String> = None;
+    let mut cli_theme_spec: Option<String> = None;
+    let mut cli_border_spec: Option<String> = None;
     let mut cli_colon: Option<bool> = None;
     let mut i = 0;
     while i < args.len() {
@@ -2630,6 +2632,18 @@ fn main() {
                     cli_align_spec = Some(value.clone());
                 }
             }
+            "--theme" => {
+                i += 1;
+                if let Some(value) = args.get(i) {
+                    cli_theme_spec = Some(value.clone());
+                }
+            }
+            "--border-color" | "--border-colour" => {
+                i += 1;
+                if let Some(value) = args.get(i) {
+                    cli_border_spec = Some(value.clone());
+                }
+            }
             other => {
                 if let Some(value) = other.strip_prefix("--label-color=") {
                     cli_color_spec = Some(value.to_string());
@@ -2639,6 +2653,12 @@ fn main() {
                     cli_font_spec = Some(value.to_string());
                 } else if let Some(value) = other.strip_prefix("--align=") {
                     cli_align_spec = Some(value.to_string());
+                } else if let Some(value) = other.strip_prefix("--theme=") {
+                    cli_theme_spec = Some(value.to_string());
+                } else if let Some(value) = other.strip_prefix("--border-color=") {
+                    cli_border_spec = Some(value.to_string());
+                } else if let Some(value) = other.strip_prefix("--border-colour=") {
+                    cli_border_spec = Some(value.to_string());
                 }
             }
         }
@@ -2650,7 +2670,7 @@ fn main() {
         println!("Usage: wfetch [--json] [--configure]");
         println!("              [--plain | --no-color | --greyscale]");
         println!("              [--label-color <spec>] [--label-font <spec>] [--help]");
-        println!("              [--align <spec>]");
+        println!("              [--align <spec>] [--theme <spec>] [--border-color <spec>]");
         println!();
         println!("  --plain                 no colors and no fonts");
         println!("  --no-color              keep fonts, use the default color");
@@ -2662,6 +2682,12 @@ fn main() {
         println!("  [--no-]label-colon      include the colon in the label styling");
         println!("  --align <spec>          top | center | bottom vertical placement");
         println!("                          of the info next to the logo");
+        println!("  --theme <spec>          plain | tree | dots | bar | arrow | diamond |");
+        println!("                          block | pipe | round | square | double | ascii |");
+        println!("                          bold | column | groups | title | outline |");
+        println!("                          dotted | grid | compact layout of the info");
+        println!("  --border-color <spec>   color of the theme border and prefix");
+        println!("                          (same values as --label-color)");
         println!("  --configure             interactive label configuration");
         println!("  --json                  print as a single line of JSON");
         println!("  --help                  show this message");
@@ -2728,6 +2754,24 @@ fn main() {
             None => eprintln!("wfetch: invalid --align value {spec:?}"),
         }
     }
+    let mut cli_theme = None;
+    if let Some(spec) = &cli_theme_spec
+        && !spec.is_empty()
+    {
+        match parse_theme(spec) {
+            Some(theme) => cli_theme = Some(theme),
+            None => eprintln!("wfetch: invalid --theme value {spec:?}"),
+        }
+    }
+    let mut cli_border = None;
+    if let Some(spec) = &cli_border_spec
+        && !spec.is_empty()
+    {
+        match parse_color(spec) {
+            Some(color) => cli_border = Some(color),
+            None => eprintln!("wfetch: invalid --border-color value {spec:?}"),
+        }
+    }
     let config = config::load();
     let style = LabelStyle {
         color: cli_color.or(config.label_color).unwrap_or(LabelColor::Auto),
@@ -2735,6 +2779,10 @@ fn main() {
         colon: cli_colon.or(config.label_colon).unwrap_or(true),
     };
     let align = cli_align.or(config.info_align).unwrap_or(Align::Top);
+    let theme = cli_theme.or(config.info_theme).unwrap_or(InfoTheme::Plain);
+    let border_color = cli_border
+        .or(config.info_border_color)
+        .unwrap_or(LabelColor::Plain);
     let mode = if plain {
         ColorMode::Plain
     } else if no_color {
@@ -2746,6 +2794,12 @@ fn main() {
     };
     let logo = select_platform_logo();
     let colorize = colors_enabled();
-    let opts = RenderOptions { mode, style, align };
+    let opts = RenderOptions {
+        mode,
+        style,
+        align,
+        theme,
+        border_color,
+    };
     print!("{}", render(logo, &gather_info(), colorize, &opts));
 }
